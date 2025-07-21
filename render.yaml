@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: marina
+    env: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXTAUTH_URL
+        fromService:
+          type: web
+          name: marina
+          property: host
+      # Add your environment variables in Render dashboard:
+      # NEXTAUTH_SECRET (generate with: openssl rand -base64 32)
+      # GOOGLE_CLIENT_ID
+      # GOOGLE_CLIENT_SECRET  
+      # GOOGLE_DRIVE_API_KEY
+      # OPENAI_API_KEY 

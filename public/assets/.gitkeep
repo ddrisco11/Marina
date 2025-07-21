@@ -1,0 +1,2 @@
+# This file ensures the assets directory is tracked in git
+# Users can drop static images here for auto-import into React components 
