@@ -1,4 +1,4 @@
-import { Button } from '@/components/ui/button'
+import AuthButton from '@/components/auth/auth-button'
 
 export default function HomePage() {
   return (
@@ -17,14 +17,9 @@ export default function HomePage() {
             Marina understands your files and provides intelligent answers with citations.
           </p>
           
-          {/* Login Button */}
+          {/* Authentication Button */}
           <div className="mb-12">
-            <Button 
-              size="lg" 
-              className="text-lg px-8 py-6 bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              🔐 Sign in with Google
-            </Button>
+            <AuthButton />
           </div>
         </div>
 

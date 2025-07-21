@@ -61,4 +61,10 @@ export interface EmbeddingGenerationProgress {
   currentFile: string
   status: 'processing' | 'complete' | 'error'
   error?: string
+}
+
+export interface Citation {
+  fileName: string
+  fileId: string
+  webViewLink?: string
 } 

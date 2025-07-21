@@ -1,5 +1,7 @@
 import { google } from 'googleapis'
 import type { DriveFile, EmbeddingsFile } from '@/types/embeddings'
+import type { GaxiosResponse } from 'gaxios'
+import type { drive_v3 } from 'googleapis'
 
 // Supported file types for text extraction
 const SUPPORTED_MIME_TYPES = new Set([
@@ -43,16 +45,20 @@ export async function searchEmbeddingsFile(accessToken: string): Promise<DriveFi
     })
 
     const files = response.data.files
-    if (!files || files.length === 0) {
+    if (!files || files.length === 0 || !files[0]) {
       return null
     }
 
     const file = files[0]
+    if (!file.id || !file.name || !file.mimeType || !file.modifiedTime) {
+      throw new Error('Invalid file metadata from Drive API')
+    }
+
     return {
-      id: file.id!,
-      name: file.name!,
-      mimeType: file.mimeType!,
-      modifiedTime: file.modifiedTime!,
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      modifiedTime: file.modifiedTime,
     }
   } catch (error) {
     throw new Error(`Failed to search for embeddings file: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -71,15 +77,46 @@ export async function downloadEmbeddingsFile(accessToken: string, fileId: string
       alt: 'media',
     })
 
-    const content = response.data as string
-    
-    try {
-      return JSON.parse(content) as EmbeddingsFile
-    } catch (parseError) {
+    // Handle different response types from Drive API
+    let content: string
+    if (typeof response.data === 'string') {
+      content = response.data
+    } else if (typeof response.data === 'object') {
+      content = JSON.stringify(response.data)
+    } else {
+      console.error('Unexpected Drive API response type:', typeof response.data)
       throw new Error('Invalid embeddings file format')
     }
+    
+    try {
+      const parsed = JSON.parse(content)
+      
+      // Validate the parsed data matches EmbeddingsFile structure
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('Invalid embeddings file format: not an object')
+      }
+      
+      if (!Array.isArray(parsed.embeddings)) {
+        throw new Error('Invalid embeddings file format: embeddings not an array')
+      }
+      
+      if (!parsed.version || !parsed.generatedAt || typeof parsed.totalFiles !== 'number') {
+        throw new Error('Invalid embeddings file format: missing required fields')
+      }
+      
+      if (!parsed.metadata || typeof parsed.metadata !== 'object' || 
+          !parsed.metadata.openaiModel || typeof parsed.metadata.embeddingDimension !== 'number') {
+        throw new Error('Invalid embeddings file format: invalid metadata')
+      }
+
+      return parsed as EmbeddingsFile
+    } catch (parseError) {
+      console.error('Error parsing embeddings file:', parseError)
+      throw new Error(`Invalid embeddings file format: ${parseError instanceof Error ? parseError.message : 'parse error'}`)
+    }
   } catch (error) {
-    if (error instanceof Error && error.message === 'Invalid embeddings file format') {
+    console.error('Error downloading embeddings file:', error)
+    if (error instanceof Error && error.message.startsWith('Invalid embeddings file format')) {
       throw error
     }
     throw new Error(`Failed to download embeddings file: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -146,34 +183,43 @@ export async function scanAllFiles(accessToken: string): Promise<DriveFile[]> {
   try {
     const drive = initializeDriveClient(accessToken)
     const allFiles: DriveFile[] = []
-    let nextPageToken: string | undefined
+    let pageToken: string | null = null
 
     do {
-      const response = await drive.files.list({
+      const params: drive_v3.Params$Resource$Files$List = {
         pageSize: 100,
-        pageToken: nextPageToken,
+        ...(pageToken ? { pageToken } : {}),
         q: 'trashed=false',
         fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,parents)',
-      })
+      }
 
+      const response = await drive.files.list(params)
       const files = response.data.files || []
       
-      // Filter for supported file types
+      // Filter for supported file types and ensure required fields
       const supportedFiles = files
-        .filter(file => file.mimeType && SUPPORTED_MIME_TYPES.has(file.mimeType))
+        .filter((file): file is drive_v3.Schema$File & { id: string; name: string; mimeType: string; modifiedTime: string } => {
+          return Boolean(
+            file &&
+            file.id &&
+            file.name &&
+            file.mimeType &&
+            SUPPORTED_MIME_TYPES.has(file.mimeType)
+          )
+        })
         .map(file => ({
-          id: file.id!,
-          name: file.name!,
-          mimeType: file.mimeType!,
-          size: file.size ? parseInt(file.size) : undefined,
-          modifiedTime: file.modifiedTime!,
-          webViewLink: file.webViewLink,
-          parents: file.parents,
-        }))
+          id: file.id,
+          name: file.name,
+          mimeType: file.mimeType,
+          ...(file.size ? { size: parseInt(file.size) } : {}),
+          modifiedTime: file.modifiedTime,
+          ...(file.webViewLink ? { webViewLink: file.webViewLink } : {}),
+          ...(file.parents ? { parents: file.parents } : {}),
+        } as DriveFile))
 
       allFiles.push(...supportedFiles)
-      nextPageToken = response.data.nextPageToken || undefined
-    } while (nextPageToken)
+      pageToken = response.data.nextPageToken || null
+    } while (pageToken)
 
     return allFiles
   } catch (error) {
@@ -190,34 +236,39 @@ export async function downloadFileContent(accessToken: string, file: DriveFile):
     
     // Handle Google Workspace files (need export)
     if (file.mimeType === 'application/vnd.google-apps.document') {
-      const response = await drive.files.get({
+      const params: drive_v3.Params$Resource$Files$Export = {
         fileId: file.id,
         mimeType: 'text/plain',
-      })
-      return response.data as string
+      }
+      const response = await drive.files.export(params) as GaxiosResponse<string>
+      return response.data
     } else if (file.mimeType === 'application/vnd.google-apps.spreadsheet') {
-      const response = await drive.files.get({
+      const params: drive_v3.Params$Resource$Files$Export = {
         fileId: file.id,
         mimeType: 'text/csv',
-      })
-      return response.data as string
+      }
+      const response = await drive.files.export(params) as GaxiosResponse<string>
+      return response.data
     } else if (file.mimeType === 'application/vnd.google-apps.presentation') {
-      const response = await drive.files.get({
+      const params: drive_v3.Params$Resource$Files$Export = {
         fileId: file.id,
         mimeType: 'text/plain',
-      })
-      return response.data as string
+      }
+      const response = await drive.files.export(params) as GaxiosResponse<string>
+      return response.data
     } else {
       // Regular file download
-      const response = await drive.files.get({
+      const params: drive_v3.Params$Resource$Files$Get = {
         fileId: file.id,
         alt: 'media',
-      })
-      return response.data as string
+      }
+      const response = await drive.files.get(params) as GaxiosResponse<string>
+      return response.data
     }
   } catch (error) {
     // Return empty string on error instead of throwing
     // This allows the process to continue with other files
+    console.error(`Error downloading file ${file.name}:`, error)
     return ''
   }
 } 

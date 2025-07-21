@@ -76,4 +76,4 @@ node_modules/
 .yarn/install-state.gz
 
 # Testing
-.nyc_output 
+.nyc_output .env.local
