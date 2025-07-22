@@ -13,28 +13,69 @@ function getAccessToken(req: NextRequest): string | null {
   const authHeader = req.headers.get('authorization')
   if (!authHeader) return null
   const match = authHeader.match(/^Bearer (.+)$/)
-  return match ? match[1] : null
+  return match?.[1] ?? null
 }
 
 export async function GET(req: NextRequest) {
   try {
+    console.log('GET /api/embeddings: Starting request')
+    
     const accessToken = getAccessToken(req)
     if (!accessToken) {
+      console.log('GET /api/embeddings: Missing access token')
       return NextResponse.json({ error: 'Missing access token' }, { status: 401 })
     }
 
+    console.log('GET /api/embeddings: Access token present:', {
+      length: accessToken.length,
+      preview: accessToken.substring(0, 20) + '...'
+    })
+
+    console.log('GET /api/embeddings: Searching for embeddings file...')
     const found = await searchEmbeddingsFile(accessToken)
     if (!found) {
+      console.log('GET /api/embeddings: No embeddings file found')
       return NextResponse.json({ embeddings: null }, { status: 404 })
     }
 
+    console.log('GET /api/embeddings: Found embeddings file, downloading...')
     const file = await downloadEmbeddingsFile(accessToken, found.id)
+    console.log('GET /api/embeddings: Successfully downloaded embeddings file with', file.embeddings.length, 'embeddings')
+    
     return NextResponse.json({ embeddings: file.embeddings })
   } catch (err: any) {
-    console.error('GET /api/embeddings error:', err)
+    console.error('GET /api/embeddings error details:', {
+      message: err.message,
+      name: err.name,
+      stack: err.stack,
+      response: err.response?.data,
+      status: err.response?.status,
+      statusText: err.response?.statusText,
+      code: err.code
+    })
+    
+    // Return more specific error messages
+    let errorMessage = err.message || 'Failed to load embeddings'
+    let statusCode = 500
+    
+    if (err.message?.includes('Authentication failed') || err.message?.includes('Invalid or expired access token')) {
+      statusCode = 401
+      errorMessage = 'Authentication failed. Please sign out and sign in again.'
+    } else if (err.message?.includes('Permission denied')) {
+      statusCode = 403
+      errorMessage = 'Permission denied. Please ensure your Google account has access to Google Drive.'
+    }
+    
     return NextResponse.json(
-      { error: err.message || 'Failed to load embeddings' },
-      { status: 500 }
+      { 
+        error: errorMessage,
+        details: {
+          originalError: err.message,
+          timestamp: new Date().toISOString(),
+          endpoint: 'GET /api/embeddings'
+        }
+      },
+      { status: statusCode }
     )
   }
 }
@@ -81,7 +122,7 @@ export async function POST(req: NextRequest) {
             
             try {
               const content = await downloadFileContent(accessToken, file)
-              const batch = await generateEmbeddingsBatch([{ ...file, content }], 'text-embedding-3-small')
+              const batch = await generateEmbeddingsBatch([{ ...file, content }])
               const embedding = batch?.[0]
               if (embedding) {
                 // Remove old embedding if exists

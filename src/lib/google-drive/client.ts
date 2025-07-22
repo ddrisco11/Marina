@@ -36,23 +36,40 @@ function initializeDriveClient(accessToken: string) {
  */
 export async function searchEmbeddingsFile(accessToken: string): Promise<DriveFile | null> {
   try {
+    console.log('searchEmbeddingsFile: Initializing Drive client...')
     const drive = initializeDriveClient(accessToken)
     
+    console.log('searchEmbeddingsFile: Making Drive API request...')
     const response = await drive.files.list({
       q: "name='marina-embeddings.json' and trashed=false",
       fields: 'files(id,name,mimeType,modifiedTime)',
       spaces: 'drive',
     })
 
+    console.log('searchEmbeddingsFile: Got response:', {
+      status: response.status,
+      statusText: response.statusText,
+      filesCount: response.data.files?.length || 0
+    })
+
     const files = response.data.files
     if (!files || files.length === 0 || !files[0]) {
+      console.log('searchEmbeddingsFile: No files found')
       return null
     }
 
     const file = files[0]
     if (!file.id || !file.name || !file.mimeType || !file.modifiedTime) {
+      console.error('searchEmbeddingsFile: Invalid file metadata:', file)
       throw new Error('Invalid file metadata from Drive API')
     }
+
+    console.log('searchEmbeddingsFile: Found file:', {
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      modifiedTime: file.modifiedTime
+    })
 
     return {
       id: file.id,
@@ -60,7 +77,33 @@ export async function searchEmbeddingsFile(accessToken: string): Promise<DriveFi
       mimeType: file.mimeType,
       modifiedTime: file.modifiedTime,
     }
-  } catch (error) {
+  } catch (error: any) {
+    // Enhanced error logging
+    console.error('searchEmbeddingsFile: Error occurred:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      code: error.code,
+      stack: error.stack
+    })
+    
+    if (error.response) {
+      console.error('searchEmbeddingsFile: Google API error response:', error.response.data)
+    }
+    console.error('searchEmbeddingsFile: Full error object:', error)
+    
+    // Provide more specific error messages based on the error type
+    if (error.response?.status === 401) {
+      throw new Error(`Authentication failed: Invalid or expired access token. Please sign in again.`)
+    } else if (error.response?.status === 403) {
+      throw new Error(`Permission denied: Check your Google Drive API permissions and scopes.`)
+    } else if (error.response?.status === 429) {
+      throw new Error(`Rate limit exceeded: Too many requests to Google Drive API.`)
+    } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      throw new Error(`Network error: Cannot connect to Google Drive API.`)
+    }
+    
     throw new Error(`Failed to search for embeddings file: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }

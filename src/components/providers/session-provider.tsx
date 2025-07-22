@@ -9,7 +9,11 @@ interface Props {
 
 export default function Providers({ children }: Props) {
   return (
-    <SessionProvider>
+    <SessionProvider 
+      refetchInterval={5 * 60} // Refetch session every 5 minutes
+      refetchOnWindowFocus={true}
+      refetchWhenOffline={false}
+    >
       {children}
     </SessionProvider>
   )

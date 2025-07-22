@@ -2,6 +2,50 @@ import '@testing-library/jest-dom'
 import { cleanup } from '@testing-library/react'
 import { afterEach, beforeAll, afterAll } from '@jest/globals'
 
+// Mock scrollIntoView for JSDOM
+global.Element.prototype.scrollIntoView = jest.fn()
+
+// Mock ReadableStream for Node.js environment
+global.ReadableStream = class MockReadableStream {
+  private _source: any
+  
+  constructor(underlyingSource: any) {
+    this._source = underlyingSource
+  }
+  
+  getReader() {
+    const source = this._source
+    
+    return {
+      read: async () => {
+        if (source && source.start) {
+          return new Promise((resolve) => {
+            const controller = {
+              enqueue: (chunk: any) => resolve({ value: chunk, done: false }),
+              close: () => resolve({ value: undefined, done: true })
+            }
+            source.start(controller)
+          })
+        }
+        return { value: undefined, done: true }
+      }
+    }
+  }
+} as any
+
+// Mock TextEncoder/TextDecoder if not available
+global.TextEncoder = global.TextEncoder || class TextEncoder {
+  encode(string: string) {
+    return new Uint8Array(Buffer.from(string))
+  }
+}
+
+global.TextDecoder = global.TextDecoder || class TextDecoder {
+  decode(buffer: Uint8Array) {
+    return Buffer.from(buffer).toString()
+  }
+}
+
 // Clean up after each test
 afterEach(() => {
   cleanup()
