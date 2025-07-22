@@ -132,107 +132,115 @@ export default function ChatPage() {
           return
         }
 
-        if (!res.ok) {
+        // Handle 404 as "no embeddings found" - this is expected for first-time users
+        if (res.status === 404) {
+          console.log('No embeddings file found (404), will create new ones...')
+          // Fall through to create embeddings via POST
+        } else if (!res.ok) {
+          // Handle other non-success status codes as actual errors
           const errorData = await safeParseResponse(res)
           const detailedErr = await createDetailedError(new Error(errorData.error || `HTTP ${res.status}`), res)
           setDetailedError(detailedErr)
           setError(errorData.error || `Failed to load embeddings: ${res.status}`)
           setIsLoading(false)
           return
+        } else {
+          // Success response (200), check if we have embeddings
+          const data = await safeParseResponse(res)
+          
+          if (data.embeddings && data.embeddings.length > 0) {
+            console.log('Found existing embeddings:', data.embeddings.length)
+            setEmbeddings(data.embeddings)
+            setIsLoading(false)
+            setError(null)
+            return
+          }
         }
 
-        const data = await safeParseResponse(res)
+        // If we reach here, either got 404 or got 200 with no embeddings
+        console.log('No embeddings found, creating new ones...')
+        setEmbeddingProgress({ current: 0, total: 0, status: 'Creating embeddings...' })
         
-        if (data.embeddings && data.embeddings.length > 0) {
-          console.log('Found existing embeddings:', data.embeddings.length)
-          setEmbeddings(data.embeddings)
+        // Create embeddings via POST
+        const createRes = await fetch('/api/embeddings', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${session?.accessToken}`,
+          },
+        })
+
+        if (!createRes.ok) {
+          const errorData = await safeParseResponse(createRes)
+          const detailedErr = await createDetailedError(new Error(errorData.error || `HTTP ${createRes.status}`), createRes)
+          setDetailedError(detailedErr)
+          setError(errorData.error || `Failed to create embeddings: ${createRes.status}`)
           setIsLoading(false)
-          setError(null)
-        } else {
-          console.log('No embeddings found, creating new ones...')
-          setEmbeddingProgress({ current: 0, total: 0, status: 'Creating embeddings...' })
-          
-          // Create embeddings via POST
-          const createRes = await fetch('/api/embeddings', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${session?.accessToken}`,
-            },
-          })
+          setEmbeddingProgress(null)
+          return
+        }
 
-          if (!createRes.ok) {
-            const errorData = await safeParseResponse(createRes)
-            const detailedErr = await createDetailedError(new Error(errorData.error || `HTTP ${createRes.status}`), createRes)
-            setDetailedError(detailedErr)
-            setError(errorData.error || `Failed to create embeddings: ${createRes.status}`)
-            setIsLoading(false)
-            setEmbeddingProgress(null)
-            return
-          }
+        const reader = createRes.body?.getReader()
+        if (!reader) {
+          const detailedErr = await createDetailedError(new Error('No response stream'))
+          setDetailedError(detailedErr)
+          setError('No response stream')
+          setIsLoading(false)
+          setEmbeddingProgress(null)
+          return
+        }
 
-          const reader = createRes.body?.getReader()
-          if (!reader) {
-            const detailedErr = await createDetailedError(new Error('No response stream'))
-            setDetailedError(detailedErr)
-            setError('No response stream')
-            setIsLoading(false)
-            setEmbeddingProgress(null)
-            return
-          }
-
-          let buffer = ''
-          let done = false
-          while (!done) {
-            const { value, done: streamDone } = await reader.read()
-            if (value) {
-              buffer += new TextDecoder().decode(value)
-              // Parse SSE-style events
-              const eventRegex = /event: (\w+)\ndata: ([^\n]+)\n\n/g
-              let match
-              let lastIndex = 0
-              while ((match = eventRegex.exec(buffer)) !== null) {
-                const [, event, dataStr] = match
-                lastIndex = eventRegex.lastIndex
-                try {
-                  const data = JSON.parse(dataStr || '{}')
-                  if (event === 'start') {
-                    setEmbeddingProgress({ current: 0, total: data.toEmbed })
-                  } else if (event === 'progress') {
-                    setEmbeddingProgress({ current: data.current, total: data.total, fileName: data.fileName })
-                  } else if (event === 'error') {
-                    const detailedErr = await createDetailedError(new Error(data.error || 'Embedding error'))
-                    setDetailedError(detailedErr)
-                    setError(data.error || 'Embedding error')
-                    setIsLoading(false)
-                    setEmbeddingProgress(null)
-                    return
-                  } else if (event === 'complete') {
-                    setEmbeddingProgress(null)
-                    setIsLoading(false)
-                    // After complete, fetch embeddings again
-                    console.log('Embeddings creation complete, fetching final result...')
-                    const finalRes = await fetch('/api/embeddings', {
-                      method: 'GET',
-                      headers: {
-                        Authorization: `Bearer ${session?.accessToken}`,
-                      },
-                    })
-                    
-                    if (finalRes.ok) {
-                      const finalData = await safeParseResponse(finalRes)
-                      setEmbeddings(finalData.embeddings || [])
-                      setError(null)
-                    }
-                    return
+        let buffer = ''
+        let done = false
+        while (!done) {
+          const { value, done: streamDone } = await reader.read()
+          if (value) {
+            buffer += new TextDecoder().decode(value)
+            // Parse SSE-style events
+            const eventRegex = /event: (\w+)\ndata: ([^\n]+)\n\n/g
+            let match
+            let lastIndex = 0
+            while ((match = eventRegex.exec(buffer)) !== null) {
+              const [, event, dataStr] = match
+              lastIndex = eventRegex.lastIndex
+              try {
+                const data = JSON.parse(dataStr || '{}')
+                if (event === 'start') {
+                  setEmbeddingProgress({ current: 0, total: data.toEmbed })
+                } else if (event === 'progress') {
+                  setEmbeddingProgress({ current: data.current, total: data.total, fileName: data.fileName })
+                } else if (event === 'error') {
+                  const detailedErr = await createDetailedError(new Error(data.error || 'Embedding error'))
+                  setDetailedError(detailedErr)
+                  setError(data.error || 'Embedding error')
+                  setIsLoading(false)
+                  setEmbeddingProgress(null)
+                  return
+                } else if (event === 'complete') {
+                  setEmbeddingProgress(null)
+                  setIsLoading(false)
+                  // After complete, fetch embeddings again
+                  console.log('Embeddings creation complete, fetching final result...')
+                  const finalRes = await fetch('/api/embeddings', {
+                    method: 'GET',
+                    headers: {
+                      Authorization: `Bearer ${session?.accessToken}`,
+                    },
+                  })
+                  
+                  if (finalRes.ok) {
+                    const finalData = await safeParseResponse(finalRes)
+                    setEmbeddings(finalData.embeddings || [])
+                    setError(null)
                   }
-                } catch (e) {
-                  console.error('Error parsing SSE data:', e)
+                  return
                 }
+              } catch (e) {
+                console.error('Error parsing SSE data:', e)
               }
-              buffer = buffer.slice(lastIndex)
             }
-            done = streamDone
+            buffer = buffer.slice(lastIndex)
           }
+          done = streamDone
         }
       } catch (err: any) {
         console.error('Error in loadEmbeddings:', err)
