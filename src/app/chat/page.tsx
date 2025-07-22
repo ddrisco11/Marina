@@ -12,6 +12,10 @@ interface EmbeddingProgress {
   fileName?: string
   status?: string
   error?: string
+  // Add incremental processing fields
+  existing?: number
+  processed?: number
+  skipped?: number
 }
 
 interface DetailedError {
@@ -98,6 +102,61 @@ export default function ChatPage() {
     return detailedErr
   }
 
+  // Helper function to render embedding progress with incremental info
+  const renderEmbeddingProgress = () => {
+    if (!embeddingProgress) return null
+
+    const { current, total, fileName, status, existing = 0, processed = 0 } = embeddingProgress
+    const skipped = (total || 0) - (processed || 0)
+
+    return (
+      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="flex items-center space-x-2 mb-2">
+          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+          <span className="text-sm font-medium text-blue-900">Processing Documents...</span>
+        </div>
+        
+        {/* Progress bar */}
+        <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
+          <div 
+            className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+            style={{ width: `${total > 0 ? (current / total) * 100 : 0}%` }}
+          ></div>
+        </div>
+        
+        {/* Progress text */}
+        <div className="text-xs text-gray-600 space-y-1">
+          <div>
+            Progress: {current} of {total} files processed
+          </div>
+          
+          {/* Show incremental processing info */}
+          {existing > 0 && (
+            <div className="text-green-600">
+              ✅ {existing} files already up-to-date (skipped)
+            </div>
+          )}
+          
+          {processed > 0 && processed !== total && (
+            <div className="text-blue-600">
+              🔄 {processed} files need processing
+            </div>
+          )}
+          
+          {fileName && (
+            <div>
+              Currently processing: <span className="font-medium">{fileName}</span>
+            </div>
+          )}
+          
+          {status && (
+            <div className="text-gray-500">{status}</div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   // Load embeddings when access token is available
   useEffect(() => {
     const loadEmbeddings = async () => {
@@ -105,10 +164,13 @@ export default function ChatPage() {
       console.log('Session access token present:', !!session?.accessToken)
       console.log('Access token preview:', session?.accessToken?.substring(0, 20) + '...')
 
+      // Clear all error and loading states before starting
       setIsLoading(true)
       setError(null)
       setDetailedError(null)
       setEmbeddingProgress(null)
+      
+      console.debug('🔄 Cleared error states before starting embeddings load')
 
       try {
         // Try to load embeddings
@@ -202,24 +264,64 @@ export default function ChatPage() {
             while ((match = eventRegex.exec(buffer)) !== null) {
               const [, event, dataStr] = match
               lastIndex = eventRegex.lastIndex
+              
+              // Debug logging for SSE events
+              console.log('Received SSE event:', { event, dataStr })
+              
               try {
                 const data = JSON.parse(dataStr || '{}')
+                console.log('Parsed SSE data:', { event, data })
+                
                 if (event === 'start') {
-                  setEmbeddingProgress({ current: 0, total: data.toEmbed })
+                  const progressData: EmbeddingProgress = { 
+                    current: 0, 
+                    total: data.toEmbed,
+                    existing: data.existing || 0,
+                    processed: data.toEmbed || 0
+                  }
+                  if (data.toEmbed === 0) {
+                    progressData.status = 'All files are already up-to-date!'
+                  }
+                  setEmbeddingProgress(progressData)
                 } else if (event === 'progress') {
-                  setEmbeddingProgress({ current: data.current, total: data.total, fileName: data.fileName })
+                  setEmbeddingProgress(prev => prev ? {
+                    ...prev,
+                    current: data.current,
+                    total: data.total,
+                    fileName: data.fileName
+                  } : null)
                 } else if (event === 'error') {
-                  const detailedErr = await createDetailedError(new Error(data.error || 'Embedding error'))
-                  setDetailedError(detailedErr)
-                  setError(data.error || 'Embedding error')
-                  setIsLoading(false)
-                  setEmbeddingProgress(null)
-                  return
+                  const errorMessage = data.error || 'Unknown error occurred'
+                  console.warn('SSE File Error event received (individual file failed):', { 
+                    fileName: data.fileName, 
+                    errorMessage, 
+                    originalData: data 
+                  })
+                  
+                  // Individual file errors should not stop the entire embedding process
+                  // Only show this as a warning in the progress, not as a fatal error
+                  if (data.fileName) {
+                    // This is an individual file error - continue processing
+                    setEmbeddingProgress(prev => prev ? {
+                      ...prev,
+                      status: `Warning: ${data.fileName} failed to process`
+                    } : null)
+                  } else {
+                    // This is a fatal error without a fileName - stop the process
+                    setDetailedError({
+                      message: errorMessage,
+                      timestamp: new Date().toISOString(),
+                    })
+                    setError(errorMessage)
+                    setIsLoading(false)
+                    setEmbeddingProgress(null)
+                    return
+                  }
                 } else if (event === 'complete') {
+                  console.log('✅ Embeddings creation complete, fetching final result...')
                   setEmbeddingProgress(null)
-                  setIsLoading(false)
-                  // After complete, fetch embeddings again
-                  console.log('Embeddings creation complete, fetching final result...')
+                  
+                  // Fetch the final embeddings
                   const finalRes = await fetch('/api/embeddings', {
                     method: 'GET',
                     headers: {
@@ -229,36 +331,42 @@ export default function ChatPage() {
                   
                   if (finalRes.ok) {
                     const finalData = await safeParseResponse(finalRes)
-                    setEmbeddings(finalData.embeddings || [])
-                    setError(null)
+                    if (finalData.embeddings) {
+                      console.log(`✅ Successfully loaded ${finalData.embeddings.length} embeddings after completion`)
+                      setEmbeddings(finalData.embeddings)
+                      setIsLoading(false)
+                      setError(null)
+                      return
+                    }
                   }
+                  
+                  // If we can't fetch final embeddings, that's an error
+                  setError('Failed to load final embeddings')
+                  setIsLoading(false)
                   return
                 }
-              } catch (e) {
-                console.error('Error parsing SSE data:', e)
+              } catch (parseError) {
+                console.error('Failed to parse SSE data:', parseError, 'Raw data:', dataStr)
               }
             }
-            buffer = buffer.slice(lastIndex)
+            buffer = buffer.substring(lastIndex)
           }
           done = streamDone
         }
       } catch (err: any) {
-        console.error('Error in loadEmbeddings:', err)
-        if (!detailedError) {
-          const detailedErr = await createDetailedError(err)
-          setDetailedError(detailedErr)
-        }
+        console.error('Failed to load embeddings:', err)
+        const detailedErr = await createDetailedError(err)
+        setDetailedError(detailedErr)
         setError(err.message || 'Failed to load embeddings')
         setIsLoading(false)
         setEmbeddingProgress(null)
       }
     }
 
-    // Only load embeddings when we have access token
     if (session?.accessToken) {
       loadEmbeddings()
     }
-  }, [session?.accessToken]) // Clean dependency array
+  }, [session?.accessToken])
 
   // Scroll to bottom on new message
   useEffect(() => {

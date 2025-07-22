@@ -10,6 +10,48 @@ A modern AI-powered chat interface that seamlessly integrates with Google Drive 
 📎 **Smart Citations**: Contextual file references with direct links  
 🔐 **Secure Authentication**: Google OAuth2 login  
 ⚡ **Modern Stack**: Next.js 14, TypeScript, Tailwind CSS, tRPC  
+🚀 **Incremental Embeddings**: Smart processing that only creates embeddings for new/modified files
+
+## Incremental Embeddings System
+
+Marina includes an intelligent incremental embeddings system that optimizes performance and reduces API costs:
+
+### How It Works
+
+1. **Smart Detection**: When processing embeddings, Marina first checks for existing embeddings stored in your Google Drive
+2. **File Comparison**: Each file is compared against existing embeddings using:
+   - File ID matching
+   - Modification timestamp comparison
+3. **Selective Processing**: Only processes files that are:
+   - **New files** (no existing embedding)
+   - **Modified files** (changed since last embedding)
+4. **Preservation**: Existing up-to-date embeddings are preserved and combined with new ones
+
+### Benefits
+
+- ⚡ **Faster Processing**: Skip re-embedding unchanged files
+- 💰 **Cost Efficient**: Reduce OpenAI API calls by avoiding duplicate processing  
+- 🔄 **Automatic Updates**: Modified files are automatically re-processed
+- 📊 **Progress Tracking**: Real-time feedback showing what's being skipped vs processed
+
+### Example Processing Log
+
+```
+📊 Embedding Summary:
+  - Total files: 15
+  - Existing embeddings: 12
+  - Files to embed: 3
+  - Files to skip: 12
+
+🚀 Processing 3 files in batches of 5
+  ✅ document1.pdf: Up to date (skipping)
+  ✅ document2.pdf: Up to date (skipping)  
+  🔄 document3.pdf: Modified since last embedding
+  ➕ document4.pdf: New file (no existing embedding)
+  ➕ document5.pdf: New file (no existing embedding)
+```
+
+This system ensures that embeddings are always up-to-date while minimizing unnecessary processing.
 
 ## Architecture
 

@@ -84,6 +84,9 @@ export async function generateEmbeddingsBatch(
   for (let i = 0; i < files.length; i++) {
     const file = files[i]
     
+    // Skip if file is undefined
+    if (!file) continue
+    
     // Report progress
     onProgress?.({
       current: i + 1,

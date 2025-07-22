@@ -9,7 +9,7 @@ function getAccessToken(req: NextRequest): string | null {
   const authHeader = req.headers.get('authorization')
   if (authHeader === null || authHeader === undefined) return null
   const match = authHeader.match(/^Bearer (.+)$/)
-  return match ? match[1] : null
+  return match?.[1] ?? null
 }
 
 export async function POST(req: NextRequest) {
